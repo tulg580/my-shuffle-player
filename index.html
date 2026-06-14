@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>나만의 유튜브 셔플러</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: #fff; padding: 20px; max-width: 800px; margin: 0 auto; }
+        button { background: #ff0000; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 5px; font-weight: bold; }
+        button:hover { background: #cc0000; }
+        select, input { padding: 10px; background: #222; color: #fff; border: 1px solid #444; border-radius: 5px; width: 100%; margin-bottom: 10px; }
+        #player-container { margin-top: 20px; position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; background: #000; }
+        #player-container iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .controls { display: flex; gap: 10px; margin-top: 10px; }
+        #track-info { margin-top: 10px; font-size: 14px; color: #aaa; }
+    </style>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
+</head>
+<body>
+
+    <h2>유튜브 셔플 플레이어 (내 전용)</h2>
+    
+    <div id="auth-section">
+        <button onclick="handleAuthClick()">구글 계정 로그인 (재생목록 가져오기)</button>
+    </div>
+    
+    <div id="playlist-section" style="display:none; margin-top: 20px;">
+        <label for="playlist-select">재생목록 선택:</label>
+        <select id="playlist-select" onchange="loadPlaylistTracks(this.value)">
+            <option value="">-- 재생목록을 선택하세요 --</option>
+        </select>
+        <button id="shuffle-btn" onclick="startShufflePlay()" style="display:none;">이 목록 섞어서 재생 시작</button>
+    </div>
+
+    <div id="player-container">
+        <div id="player"></div>
+    </div>
+
+    <div class="controls">
+        <button onclick="prevVideo()">이전 곡</button>
+        <button onclick="nextVideo()">다음 곡 (스킵)</button>
+    </div>
+    <div id="track-info">현재 재생 중인 곡 정보가 여기에 표시됨.</div>
+
+    <script>
+        // CLIENT_ID를 네 구글 콘솔에서 발급받은 걸로 바꿔야 함!
+        const CLIENT_ID = '498165520011-su8cnjggruc1kv6uu8hkdq1tmir18jd9.apps.googleusercontent.com';
+        const SCOPES = 'https://www.googleapis.com/auth/youtube.readonly';
+        
+        let accessToken = null;
+        let client = null;
+        let player = null;
+        
+        let originalTracks = []; // 원본 영상 ID 배열
+        let shuffledTracks = []; // 피셔-예이츠로 조진 셔플 배열
+        let currentTrackIndex = 0;
+
+        // GIS 초기화
+        window.onload = function () {
+            client = google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: SCOPES,
+                callback: (tokenResponse) => {
+                    if (tokenResponse && tokenResponse.access_token) {
+                        accessToken = tokenResponse.access_token;
+                        document.getElementById('auth-section').style.display = 'none';
+                        document.getElementById('playlist-section').style.display = 'block';
+                        fetchMyPlaylists();
+                    }
+                },
+            });
+        };
+
+        // 유튜브 IFrame 플레이어 초기화 (API 자동 호출)
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('player', {
+                height: '360',
+                width: '640',
+                videoId: '', // 처음엔 비워둠
+                events: {
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+        }
+
+        // 로그인 버튼 클릭
+        function handleAuthClick() {
+            client.requestAccessToken();
+        }
+
+        // 1. 내 재생목록 목록 가져오기
+        async function fetchMyPlaylists() {
+            let url = `https://www.googleapis.com/youtube/v3/playlists?part=snippet&mine=true&maxResults=50`;
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            const data = await response.json();
+            
+            const select = document.getElementById('playlist-select');
+            data.items.forEach(item => {
+                let opt = document.createElement('option');
+                opt.value = item.id;
+                opt.innerText = item.snippet.title;
+                select.appendChild(opt);
+            });
+        }
+
+        // 2. 선택한 재생목록의 모든 곡 ID 긁어오기 (페이지네이션 처리)
+        async function loadPlaylistTracks(playlistId) {
+            if (!playlistId) return;
+            originalTracks = [];
+            let nextPageToken = '';
+            
+            document.getElementById('track-info').innerText = "재생목록 곡들 긁어오는 중...";
+
+            do {
+                let url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${playlistId}&maxResults=50&pageToken=${nextPageToken}`;
+                const response = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                const data = await response.json();
+                
+                if(data.items) {
+                    data.items.forEach(item => {
+                        if (item.snippet.resourceId && item.snippet.resourceId.videoId) {
+                            originalTracks.push({
+                                id: item.snippet.resourceId.videoId,
+                                title: item.snippet.title
+                            });
+                        }
+                    });
+                }
+                nextPageToken = data.nextPageToken || '';
+            } while (nextPageToken);
+
+            document.getElementById('track-info').innerText = `총 ${originalTracks.length}곡 로드 완료. 셔플 준비 완.`;
+            document.getElementById('shuffle-btn').style.display = 'inline-block';
+        }
+
+        // 3. 피셔-예이츠 셔플 알고리즘 (찐 무작위)
+        function fisherYatesShuffle(array) {
+            let arr = [...array];
+            for (let i = arr.length - 1; i > 0; i--) {
+                let j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        // 4. 셔플 재생 시작
+        function startShufflePlay() {
+            if (originalTracks.length === 0) return;
+            shuffledTracks = fisherYatesShuffle(originalTracks);
+            currentTrackIndex = 0;
+            playCurrentVideo();
+        }
+
+        // 5. 현재 인덱스 영상 틀기
+        function playCurrentVideo() {
+            if (shuffledTracks.length === 0) return;
+            let track = shuffledTracks[currentTrackIndex];
+            
+            document.getElementById('track-info').innerText = `[${currentTrackIndex + 1}/${shuffledTracks.length}] ${track.title}`;
+            
+            // 프리미엄 계정인 상태로 로그인했으면 이 플레이어에서도 광고 안 나옴
+            player.loadVideoById(track.id);
+        }
+
+        // 6. 한 곡 끝나면 자동으로 다음 곡 넘어가기
+        function onPlayerStateChange(event) {
+            // YT.PlayerState.ENDED 가 0임 (재생 종료 상태)
+            if (event.data === YT.PlayerState.ENDED) {
+                nextVideo();
+            }
+        }
+
+        function nextVideo() {
+            if (currentTrackIndex < shuffledTracks.length - 1) {
+                currentTrackIndex++;
+                playCurrentVideo();
+            } else {
+                document.getElementById('track-info').innerText = "셔플 재생목록 끝! 다시 섞으려면 버튼 누르셈.";
+            }
+        }
+
+        function prevVideo() {
+            if (currentTrackIndex > 0) {
+                currentTrackIndex--;
+                playCurrentVideo();
+            }
+        }
+    </script>
+</body>
+</html>
