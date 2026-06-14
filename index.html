@@ -80,6 +80,7 @@
                 videoId: '', // 처음엔 비워둠
                 events: {
                     'onStateChange': onPlayerStateChange
+                    'onError': onPlayerError
                 }
             });
         }
@@ -189,6 +190,21 @@
                 currentTrackIndex--;
                 playCurrentVideo();
             }
+        }
+
+        // 유튜브 플레이어 에러 발생 시 자동 처리
+        function onPlayerError(event) {
+            // 유튜브 API가 뱉는 에러 코드들:
+            // 2: 잘못된 비디오 ID
+            // 5: 플레이어 에러 (IFrame 관련)
+            // 100: 동영상을 찾을 수 없음 (삭제되었거나 비공개)
+            // 101 또는 150: 퍼가기 허용 안 됨, 또는 폭파된 계정 영상
+            console.log("유튜브 에러 발생 (코드: " + event.data + ") - 다음 곡으로 넘김");
+    
+            // 0.5초 정도 살짝 딜레이 줬다가 다음 영상으로 강제 토스
+            setTimeout(function() {
+                nextVideo();
+             }, 500);
         }
     </script>
 </body>
